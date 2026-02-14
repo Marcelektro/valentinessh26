@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -19,10 +20,15 @@ type Session struct {
 	LastSentIndex int
 }
 
+type AppConfig struct {
+	AllowedHostnames []string `json:"allowed_hostnames"`
+}
+
 func main() {
 	host := flag.String("host", "0.0.0.0", "host to bind to")
 	port := flag.Int("port", 2717, "port to listen on")
 	keyFile := flag.String("key", "ssh_host_key", "path to private host key file (defaults to ssh_host_key)")
+	cfgPath := flag.String("config", "config.json", "path to JSON config file with allowed hostnames")
 	flag.Parse()
 
 	var hostKeyBytes []byte
@@ -42,6 +48,16 @@ func main() {
 	}
 	config.AddHostKey(hostKey)
 
+	appCfg := &AppConfig{}
+	if data, err := os.ReadFile(*cfgPath); err == nil {
+		if err := json.Unmarshal(data, appCfg); err != nil {
+			log.Printf("Warning: failed to parse config file %s: %v", *cfgPath, err)
+			appCfg = &AppConfig{}
+		}
+	} else {
+		log.Printf("Config file %s not found or unreadable: %v", *cfgPath, err)
+	}
+
 	listenAddr := fmt.Sprintf("%s:%d", *host, *port)
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -58,12 +74,25 @@ func main() {
 			continue
 		}
 
-		go handleConnection(conn, config)
+		go handleConnection(conn, config, appCfg.AllowedHostnames)
 	}
 }
 
-func handleConnection(conn net.Conn, config *ssh.ServerConfig) {
+func handleConnection(conn net.Conn, config *ssh.ServerConfig, allowed []string) {
 	defer conn.Close()
+
+	if len(allowed) > 0 {
+		remoteAddr := conn.RemoteAddr().String()
+		remoteIP, _, err := net.SplitHostPort(remoteAddr)
+		if err != nil {
+			remoteIP = remoteAddr
+		}
+
+		if !isHostnameAllowed(remoteIP, allowed) {
+			log.Printf("Rejected connection from %s: hostname not whitelisted", remoteIP)
+			return
+		}
+	}
 
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, config)
 	if err != nil {
@@ -405,6 +434,31 @@ func animateHearts(channel ssh.Channel, offsetX, offsetY int) {
 		time.Sleep(delay)
 	}
 
+}
+
+func isHostnameAllowed(remoteIP string, allowed []string) bool {
+
+	for _, a := range allowed {
+		if strings.EqualFold(a, remoteIP) {
+			return true
+		}
+	}
+
+	names, err := net.LookupAddr(remoteIP)
+	if err != nil {
+		return false
+	}
+
+	for _, name := range names {
+		n := strings.TrimSuffix(name, ".")
+		for _, a := range allowed {
+			if strings.EqualFold(n, a) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func readLineWithEcho(rw io.ReadWriter) (string, error) {
