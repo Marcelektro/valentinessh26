@@ -2,26 +2,37 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"time"
 	"math/rand"
 
 	"golang.org/x/crypto/ssh"
-
 )
-
 
 type Session struct {
 	LastSentIndex int
 }
 
 func main() {
-	// todo: load from file
-	hostKey, err := ssh.ParsePrivateKey([]byte(hostKeyPEM))
+	host := flag.String("host", "0.0.0.0", "host to bind to")
+	port := flag.Int("port", 2717, "port to listen on")
+	keyFile := flag.String("key", "ssh_host_key", "path to private host key file (defaults to ssh_host_key)")
+	flag.Parse()
+
+	var hostKeyBytes []byte
+	hostKeyBytes, err := os.ReadFile(*keyFile)
+	if err != nil {
+		log.Printf("Warning: failed to read key file %s: %v", *keyFile, err)
+	    os.Exit(-1)
+	}
+
+	hostKey, err := ssh.ParsePrivateKey(hostKeyBytes)
 	if err != nil {
 		log.Fatalf("Failed to parse host key: %v", err)
 	}
@@ -31,13 +42,14 @@ func main() {
 	}
 	config.AddHostKey(hostKey)
 
-	listener, err := net.Listen("tcp", "0.0.0.0:2222")
+	listenAddr := fmt.Sprintf("%s:%d", *host, *port)
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		log.Fatalf("Failed to listen on port 2222: %v", err)
+		log.Fatalf("Failed to listen on %s: %v", listenAddr, err)
 	}
 	defer listener.Close()
 
-	log.Println("SSH server running on port 2222. Connect with: ssh localhost -p 2222")
+	log.Printf("SSH server running on %s. Connect with: ssh <server> -p %d", listenAddr, *port)
 
 	for {
 		conn, err := listener.Accept()
@@ -437,14 +449,3 @@ func readLineWithEcho(rw io.ReadWriter) (string, error) {
 
 	return string(buf), nil
 }
-
-
-
-const hostKeyPEM = `-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACCEiuaSj6r++53VqlthtONhKqkARN+xZUDmumSgdaJyFgAAAJj5TCHd+Uwh
-3QAAAAtzc2gtZWQyNTUxOQAAACCEiuaSj6r++53VqlthtONhKqkARN+xZUDmumSgdaJyFg
-AAAEBA5q7SF702ojYxrkKEf2YTWKdBtRLEsRHDhe/ATg5k7YSK5pKPqv77ndWqW2G042Eq
-qQBE37FlQOa6ZKB1onIWAAAAE21hcmNlbGVrdHJvQG1vbGFyY2gBAg==
------END OPENSSH PRIVATE KEY-----
-`
